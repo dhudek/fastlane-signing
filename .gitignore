@@ -1,0 +1,12 @@
+.DS_Store
+*/.DS_Store
+keys/*
+fastlane/README.md
+fastlane/credentials.rb
+Gemfile.lock
+.bundle/
+fastlane/report.xml
+logs/
+profiles/
+vendor/
+apps/

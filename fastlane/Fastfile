@@ -1,0 +1,110 @@
+require 'fileutils'
+require 'net/http'
+require 'digest'
+require 'socket'
+require 'plist'
+require 'json'
+require 'uri'
+require 'cfpropertylist'
+require 'securerandom'
+require 'logger'
+require 'date'
+
+# Require credentials and utility files
+require './constants.rb'
+require './credentials.rb'
+require './utils/helpers.rb'
+require './ios/download-profiles.rb'
+require './ios/identify-bundle-id.rb'
+require './android/sign-apk.rb'
+
+#==============================================
+# Main Distribution Lane
+#==============================================
+lane :sign_dis do
+  logger.info "Starting app signing process"
+
+  app_list = APP_LIST
+  apps_to_sign = app_list['content']
+  logger.info "Total apps to sign: #{apps_to_sign.count}"
+
+  apps_to_sign.each do |app_data|
+    begin
+      platform = app_data['platform']
+      logger.info "Processing app: #{app_data['application_id']} on platform: #{platform}"
+
+      if platform == 'i'
+        sign_ios_app(app: app_data)
+      elsif platform == 'a'
+        sign_android_app(app: app_data)
+      else
+        logger.error "Unknown platform: #{platform}"
+        raise StandardError, "Unknown platform: #{platform}"
+      end
+
+    rescue StandardError => e
+      logger.error "Failed to process app: #{app_data['application_id']}. Reason: #{e.message}"
+      logger.error e.backtrace.join("\n")
+      next # Continue to the next app
+    end
+  end
+ensure
+  lock_file = File.join(PATHS[:root_dir], PATHS[:lock_file])
+  if File.exist?(lock_file)
+    File.delete(lock_file)
+    logger.info "Lock file deleted: #{lock_file}"
+  end
+  logger.info "That's all folks"
+end
+
+#==============================================
+# Private Helper Lanes
+#==============================================
+private_lane :sign_ios_app do |options|
+  app = options[:app]
+  app['app_id'] = app['bundle_id'] || app['package_id'] || app['application_id']
+
+  # Merge credentials and dynamic paths
+  creds = get_ios_creds()
+  app.merge!(creds)
+  app.merge!(APP_DOWNLOAD_RESPONSE)
+  app = app.transform_keys(&:to_sym)
+
+  # Download and identify provisioning profiles
+  provisioning_profiles = download_provisions(app)
+  logger.info "Found #{provisioning_profiles.length} provisioning profiles."
+  provisioning_profile_map = identify_bundles(app, provisioning_profiles)
+  logger.info "Provisioning map: #{provisioning_profile_map.inspect}"
+
+  # Prepare file paths and copy the IPA
+  source_path = File.join(app[:directory_in_path], app[:app_file])
+  destination_path = File.join(app[:directory_out_path], app[:app_file])
+  FileUtils.mkdir_p(app[:directory_out_path])
+  FileUtils.cp(source_path, destination_path)
+  logger.info "Copied IPA to output directory for signing."
+
+  # Resign the IPA
+  resign(
+    ipa: destination_path,
+    signing_identity: app[:sign_identity],
+    provisioning_profile: provisioning_profile_map,
+    bundle_id: app[:app_id],
+    use_app_entitlements: true,
+    keychain_path: PATHS[:keychain_path]
+  )
+  logger.info "Successfully resigned #{app[:app_id]}"
+end
+
+private_lane :sign_android_app do |options|
+  app = options[:app]
+  app['app_id'] = app['package_id'] || app['application_id']
+
+  # Merge credentials and dynamic paths
+  creds = get_android_creds()
+  app.merge!(creds)
+  app.merge!(APP_DOWNLOAD_RESPONSE)
+
+  # Sign the APK
+  sign_apk(app)
+  logger.info "Successfully signed #{app['app_id']}"
+end
