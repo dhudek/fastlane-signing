@@ -5,6 +5,7 @@ I have no idea what I'm doing, but needed a fastlane signing solution. some part
 ## requirements
 * android sdk tools
 * x-code
+* fastlane
 * ruby 
 * bundler
 
